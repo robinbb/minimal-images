@@ -1,0 +1,49 @@
+#! /usr/bin/env bash
+#
+# Copyright 2018 Robin Bate Boerop
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+set -euo pipefail
+set -x
+
+ROOT_DIR="$( cd "$(dirname "${BASH_SOURCE[0]}")" && pwd )"
+NIX_RELEASE_COMMIT=7d24cf8ea99cb869193fef4553353e77594f329c
+BUILD_OUTPUT_DIR="$ROOT_DIR"/build-output
+
+mkdir -p "$BUILD_OUTPUT_DIR"
+
+build_image() {
+  local IMAGE_NAME="$(basename "${1%.*}")"
+  local BUILD_OUTPUT="$BUILD_OUTPUT_DIR"/"$IMAGE_NAME"
+  mkdir -p "$BUILD_OUTPUT"
+  local BUILD_TARGET="$BUILD_OUTPUT"/result
+  rm -f "$BUILD_TARGET"
+  local VERSION=$(cat \
+    <(echo "$IMAGE_NAME") \
+    <(echo "$NIX_RELEASE_COMMIT") \
+    <(git ls-tree HEAD "$1") \
+    | git hash-object --stdin)
+  echo VERSION=$VERSION
+  local RESULT="$(
+    docker run --rm \
+      --mount type=bind,source="$1",target=/nix-input \
+      --mount type=bind,source="$BUILD_OUTPUT",target=/nix-output \
+      -it \
+      lnl7/nix \
+      bash -c \
+        "set -xeuo pipefail && nix-build \
+        -I nixpkgs=https://github.com/NixOS/nixpkgs-channels/archive/${NIX_RELEASE_COMMIT}.tar.gz \
+        --argstr imageVersion $VERSION \
+        /nix-input && \
+        cp ./result /nix-output" )"
+  du -h "$BUILD_OUTPUT"
+  docker load < "$BUILD_TARGET"
+}
+
+for img in $(find "$ROOT_DIR"/image-definitions -name "*.nix" | sort) ; do
+  echo
+  build_image "$img"
+done
